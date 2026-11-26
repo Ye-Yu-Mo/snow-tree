@@ -580,14 +580,23 @@ body{
         p.x += Math.sin(time * 0.6 + p.phase) * p.drift * dt * 12;
         if (p.y < -320) { p.y = 680; p.x = rnd(-520, 520); }
       }
-      const pr = project(p, cyaw, syaw, cpit, spit);
-      if (!pr) continue;
+      // 内联投影：每帧几百个对象会让 GC 隔一会儿抖一下
+      const sx1 = p.x * cyaw - p.z * syaw;
+      const sz1 = p.x * syaw + p.z * cyaw;
+      const sy1 = p.y * cpit - sz1 * spit;
+      const sz2 = p.y * spit + sz1 * cpit;
+      const szc = sz2 + camZ;
+      if (szc < 40) continue;
+      const ss = focal / szc;
+      const pX = CX + sx1 * ss * zoom;
+      const pY = CY - sy1 * ss * zoom;
+      if (pX < -40 || pX > W + 40 || pY < -40 || pY > H + 40) continue;
       const tw = 0.55 + 0.45 * Math.sin(time * p.speed + p.phase);
       const alpha = tw * 0.55 * light;
-      const r = p.size * pr.s * zoom * 2.0;
+      const r = p.size * ss * zoom * 2.0;
       if (r < 0.3) continue;
       ctx.globalAlpha = alpha;
-      ctx.drawImage(sprites.snow, pr.x - r, pr.y - r, r * 2, r * 2);
+      ctx.drawImage(sprites.snow, pX - r, pY - r, r * 2, r * 2);
     }
 
     // 地面
