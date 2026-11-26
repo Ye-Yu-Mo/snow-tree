@@ -251,8 +251,8 @@ body{
   }
 
   function buildTree() {
-    const N_BODY = LOW ? 2200 : 4800;
-    const N_GAR = LOW ? 460 : 1000;
+    const N_BODY = LOW ? 1800 : 4200;
+    const N_GAR = LOW ? 420 : 900;
 
     // — 树体：大部分均匀铺满锥体，少部分沿螺旋成枝，才既有体积又有旋纹
     for (let i = 0; i < N_BODY; i++) {
@@ -374,6 +374,17 @@ body{
         p.ox = p.x * m + rnd(-60, 60);
         p.oy = p.y * m + rnd(-60, 60);
         p.oz = p.z * m + rnd(-60, 60);
+
+        // — 散开：预存一个"炸开后"的位置，以及每个人起爆的延迟
+        // 用球面均匀采样打散锥形，否则只是把树放大一圈
+        const rr2 = rnd(90, 340);
+        const u = Math.random() * 2 - 1;
+        const th = Math.random() * Math.PI * 2;
+        const sq = Math.sqrt(1 - u * u);
+        p.sx = p.x * 0.35 + Math.cos(th) * sq * rr2;
+        p.sy = p.y * 0.45 + u * rr2 * 1.15;
+        p.sz = p.z * 0.35 + Math.sin(th) * sq * rr2;
+        p.delay = Math.random() * 0.6;
       }
     }
   }
@@ -389,11 +400,16 @@ body{
   let last = t0;
   let starX = 0, starY = 0;
 
+  let scatterTarget = 0;
+  let scatterK = 0;
+  let qScale = 0.85;          // 自适应画质：掉帧就降，流畅就升
+  let ftAcc = 0, ftN = 0;
+
   const AUTO_SPIN = REDUCED ? 0 : 0.055;
 
   // ---------------------------------------------------------------- 尺寸
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, LOW ? 1.5 : 2);
+    DPR = Math.min(window.devicePixelRatio || 1, LOW ? 1.25 : 1.5);
     W = window.innerWidth;
     H = window.innerHeight;
     canvas.width = Math.round(W * DPR);
@@ -450,16 +466,32 @@ body{
   };
 
   function drawPoints(arr, cyaw, syaw, cpit, spit, time) {
-    const k = introT;
-    for (let i = 0; i < arr.length; i++) {
-      const p = arr[i];
+    const intro = introT;
+    const sc = scatterK;
+    const step = qScale > 0.995 ? 1 : 1 / qScale;   // 按步长抽样：整棵树均匀变稀
+    const len = arr.length;
 
-      let px = p.x, py = p.y, pz = p.z;
-      if (k < 1 && p.ox !== undefined) {
-        const ik = 1 - k;
-        px = p.x * k + p.ox * ik;
-        py = p.y * k + p.oy * ik;
-        pz = p.z * k + p.oz * ik;
+    for (let f = 0; f < len; f += step) {
+      const p = arr[f | 0];
+
+      let bx = p.x, by = p.y, bz = p.z;
+
+      // 散开：每个粒子按自己的延迟起飞
+      if (sc > 0.002 && p.sx !== undefined) {
+        const kk = clamp((sc - p.delay * 0.35) / 0.65, 0, 1);
+        if (kk > 0) {
+          bx += (p.sx - p.x) * kk;
+          by += (p.sy - p.y) * kk;
+          bz += (p.sz - p.z) * kk;
+        }
+      }
+
+      let px = bx, py = by, pz = bz;
+      if (intro < 1 && p.ox !== undefined) {
+        const ik = 1 - intro;
+        px = bx * intro + p.ox * ik;
+        py = by * intro + p.oy * ik;
+        pz = bz * intro + p.oz * ik;
       }
 
       const x1 = px * cyaw - pz * syaw;
@@ -472,7 +504,7 @@ body{
       const s = focal / zc;
       const X = CX + x1 * s * zoom;
       const Y = CY - y1 * s * zoom;
-      if (X < -40 || X > W + 40 || Y < -40 || Y > H + 40) continue;
+      if (X < -60 || X > W + 60 || Y < -60 || Y > H + 60) continue;
 
       const tw = 0.74 + 0.26 * Math.sin(time * p.speed + p.phase);
       const depth = clamp(s * 1.05, 0.22, 1.0);
@@ -510,6 +542,20 @@ body{
     }
     light += (lightTarget - light) * Math.min(1, dt * 5);
 
+    // 自适应画质：40 帧平均一下，掉帧就减粒子，游刃有余就加回来
+    ftAcc += dt; ftN++;
+    if (ftN >= 40) {
+      const avg = ftAcc / ftN;
+      const target = LOW ? 1 / 30 : 1 / 60;
+      if (avg > target * 1.35) qScale = Math.max(0.45, qScale - 0.12);
+      else if (avg < target * 1.08) qScale = Math.min(1, qScale + 0.06);
+      ftAcc = 0; ftN = 0;
+    }
+
+    // 散开 / 收拢
+    scatterK += (scatterTarget - scatterK) * Math.min(1, dt * 6);
+    if (scatterK < 0.001) scatterK = 0;
+
     const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
     const cpit = Math.cos(pitch), spit = Math.sin(pitch);
 
@@ -526,8 +572,9 @@ body{
 
     // 雪
     const snowK = REDUCED ? 0.35 : 1;
-    for (let i = 0; i < snow.length; i++) {
-      const p = snow[i];
+    const snowStep = qScale > 0.995 ? 1 : 1 / qScale;
+    for (let f = 0; f < snow.length; f += snowStep) {
+      const p = snow[f | 0];
       if (!REDUCED) {
         p.y -= p.vy * dt * snowK;
         p.x += Math.sin(time * 0.6 + p.phase) * p.drift * dt * 12;
@@ -559,7 +606,7 @@ body{
       starX = sp.x; starY = sp.y;
       const pulse = 0.78 + 0.22 * Math.sin(time * 1.6);
       const gr = 36 * sp.s * zoom * pulse;
-      ctx.globalAlpha = 0.34 * light * pulse;
+      ctx.globalAlpha = 0.34 * light * pulse * (1 - scatterK * 0.85);
       ctx.drawImage(sprites.gold, starX - gr, starY - gr, gr * 2, gr * 2);
     }
 
@@ -707,6 +754,7 @@ body{
     if (e.key === "+" || e.key === "=") zoom = clamp(zoom * 1.08, 0.55, 2.7);
     if (e.key === "-" || e.key === "_") zoom = clamp(zoom / 1.08, 0.55, 2.7);
     if (e.key === " ") { e.preventDefault(); burst(starX, starY, 120, 230); }
+    if (e.key === "s" || e.key === "S") scatterTarget = scatterTarget > 0.5 ? 0 : 1;
   });
 
   window.addEventListener("resize", resize);
@@ -801,7 +849,7 @@ body{
       handBtn.disabled = false;
       handBtn.classList.add("on");
       handBtn.textContent = "手势已开启";
-      if (!auto) toast("张开手掌转动树 · 握拳松开 · 拇指食指捏合点灯", 4600);
+      if (!auto) toast("张开手掌散开 · 握拳收拢 · 拇指食指捏合点灯", 4600);
       detectLoop();
     } catch (err) {
       console.error(err);
@@ -837,7 +885,7 @@ body{
   function detectLoop() {
     if (!HAND.on) return;
     // 手机每 70ms 检一次就够，桌面 33ms；比每帧都跑省一半电
-    const gap = LOW ? 70 : 33;
+    const gap = LOW ? 80 : 45;
     const t = performance.now();
     if (cam.readyState >= 2 && t - HAND.lastDetect >= gap && cam.currentTime !== HAND.lastVideoTime) {
       HAND.lastDetect = t;
@@ -851,7 +899,7 @@ body{
 
   function handleHand(res) {
     const lm = res && res.landmarks && res.landmarks[0];
-    if (!lm) { HAND.mode = "idle"; HAND.base = null; return; }
+    if (!lm) { HAND.mode = "idle"; HAND.base = null; scatterTarget = 0; return; }
 
     const wrist = lm[0];
     const mcp = lm[9];
@@ -877,6 +925,8 @@ body{
     }
 
     if (open > 1.62) {
+      // 张开手掌 = 散开，同时用掌心位置转动
+      scatterTarget = 1;
       if (HAND.mode !== "steer") {
         HAND.mode = "steer";
         HAND.base = { yaw: yaw, pitch: pitch, hx: hx, hy: hy };
@@ -886,6 +936,8 @@ body{
       }
       spin = 0;
     } else if (open < 1.24) {
+      // 握拳 = 收拢回圣诞树
+      scatterTarget = 0;
       HAND.mode = "idle";
       HAND.base = null;
     }
