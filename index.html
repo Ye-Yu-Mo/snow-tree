@@ -179,7 +179,7 @@ const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const PAL = {
   gold:     [0.965, 0.788, 0.478],
   goldDeep: [0.722, 0.525, 0.259],
-  pine:     [0.455, 0.839, 0.631],
+  pine:     [0.340, 0.720, 0.520],
   berry:    [1.000, 0.490, 0.431],
   snow:     [0.859, 0.906, 1.000],
 };
@@ -211,14 +211,16 @@ document.body.insertBefore(renderer.domElement, document.body.firstChild);
 const group = new THREE.Group();
 scene.add(group);
 
+/* 星星的光晕交给 Bloom，不再叠贴图 */
+
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.45, 0.35);
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.70, 0.45, 0.30);
 composer.addPass(bloom);
 
 /* ---------------------------------------------------------------- 着色器 */
 const VERT = `
-uniform float uTime, uLight, uScatter, uIntro, uPixelRatio, uScale;
+uniform float uTime, uLight, uScatter, uIntro, uPixelRatio, uScale, uCamDist;
 attribute vec3 aColor;
 attribute vec3 aScatter;
 attribute vec3 aStart;
@@ -231,10 +233,19 @@ void main(){
   p = mix(aStart, p, uIntro);
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
-  float tw = 0.76 + 0.24 * sin(uTime * aSpeed + aPhase);
+  float tw = 0.72 + 0.28 * sin(uTime * aSpeed + aPhase);
   gl_PointSize = aSize * uPixelRatio * uScale / max(1.0, -mv.z) * (1.0 + 0.10 * k);
-  vAlpha = tw * uLight;
-  vColor = aColor;
+
+  // 远近衰减：后面的粒子变暗，前中后三层才分得开
+  float prox = clamp(-mv.z / uCamDist, 0.0, 2.0);
+  float depthFade = mix(1.0, 0.5, smoothstep(0.82, 1.30, prox));
+
+  // 高度渐变：底部偏冷，顶部偏暖 —— 像被顶灯从上面照下来
+  float hgt = clamp((position.y + 260.0) / 640.0, 0.0, 1.0);
+  vec3 tint = mix(vec3(0.82, 0.93, 1.06), vec3(1.14, 0.96, 0.70), hgt);
+
+  vAlpha = tw * uLight * depthFade;
+  vColor = aColor * tint;
 }`;
 
 const FRAG = `
@@ -257,6 +268,7 @@ const uniforms = {
   uIntro: { value: REDUCED ? 1 : 0 },
   uPixelRatio: { value: 1 },
   uScale: { value: 1000 },
+  uCamDist: { value: 1200 },
 };
 
 const treeMat = new THREE.ShaderMaterial({
@@ -279,32 +291,35 @@ function coneRadius(h) {
 function buildTree() {
   const body = [], garland = [], star = [], ground = [], bg = [];
 
-  const N_BODY = LOW ? 2000 : 4200;
+  // 叶序（phyllotaxis）：黄金角 137.5°。松针、向日葵种子都是这么排的，
+  // 直接随机撒点只会得到一团噪点，按这个角度撒会自动长出分层和旋纹。
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+  const N_BODY = LOW ? 3600 : 10000;
   for (let i = 0; i < N_BODY; i++) {
-    const h = Math.pow(Math.random(), 0.74);
+    const t = i / N_BODY;
+    const h = Math.pow(t, 0.92);              // 底部略密
     const rMax = coneRadius(h);
-    const onArm = Math.random() < 0.34;
-    const a = onArm
-      ? h * 18.0 + (Math.random() * 2 - 1) * 0.55
-      : Math.random() * TAU;
-    const rr = onArm ? rMax * rnd(0.86, 1.0) : rMax * Math.sqrt(rnd(0.28, 1.0));
+    const a = i * GOLDEN;
+    // 0.55–1.0：既有表面针叶，也有点体积，不至于空壳
+    const shell = 0.55 + 0.45 * Math.sqrt(Math.random());
+    const rr = rMax * shell;
     const p = {
       x: Math.cos(a) * rr,
-      y: -TH / 2 + h * TH,
+      y: -TH / 2 + h * TH + rnd(-3, 3),
       z: Math.sin(a) * rr,
-      size: rnd(2.0, 3.4),
+      size: rnd(2.4, 3.8),
       phase: Math.random() * TAU,
       speed: rnd(0.6, 2.0),
     };
     const roll = Math.random();
-    if (roll < 0.055) { p.c = "gold"; p.size *= 1.25; }
-    else if (roll < 0.085) { p.c = "berry"; p.size *= 1.2; }
-    else if (roll < 0.13) { p.c = "snow"; }
+    if (roll < 0.085) { p.c = "gold"; p.size *= 1.3; }
+    else if (roll < 0.125) { p.c = "berry"; p.size *= 1.2; }
+    else if (roll < 0.19) { p.c = "snow"; }
     else { p.c = "pine"; }
     body.push(p);
   }
 
-  const N_GAR = LOW ? 420 : 900;
+  const N_GAR = LOW ? 500 : 1200;
   for (let i = 0; i < N_GAR; i++) {
     const k = i % 2;
     const t = Math.floor(i / 2) / (N_GAR / 2);
@@ -337,7 +352,7 @@ function buildTree() {
       x: a[0] + (b[0] - a[0]) * t + rnd(-1.5, 1.5),
       y: STAR_Y + (a[1] + (b[1] - a[1]) * t) + rnd(-1.5, 1.5),
       z: rnd(-4, 4),
-      size: rnd(2.6, 4.4),
+      size: rnd(3.0, 5.0),
       phase: Math.random() * TAU,
       speed: rnd(0.8, 2.2),
       c: Math.random() < 0.62 ? "gold" : "snow",
@@ -452,7 +467,7 @@ const baseCount = {};
 for (const key in parts) baseCount[key] = parts[key].geometry.attributes.position.count;
 
 /* ---------------------------------------------------------------- 雪 */
-const SNOW_N = LOW ? 260 : 460;
+const SNOW_N = LOW ? 380 : 700;
 const snowPos = new Float32Array(SNOW_N * 3);
 const snowSiz = new Float32Array(SNOW_N);
 const snowPha = new Float32Array(SNOW_N);
@@ -540,25 +555,47 @@ function burst(px, py, n, power) {
   const wx = (px / window.innerWidth - 0.5) * visW;
   const wy = (0.5 - py / window.innerHeight) * visH;
 
-  for (let i = 0; i < n; i++) {
-    const s = sparkState[sparkCursor];
-    const idx = sparkCursor;
-    sparkCursor = (sparkCursor + 1) % SPARK_N;
-    const a = Math.random() * TAU;
-    const v = power * (0.25 + Math.random() * 0.95);
-    s.alive = true;
-    s.vx = Math.cos(a) * v;
-    s.vy = Math.sin(a) * v - power * 0.12;
-    s.life = 1;
-    s.decay = rnd(0.9, 1.8);
-    sparkPos[idx * 3] = wx;
-    sparkPos[idx * 3 + 1] = wy;
-    sparkPos[idx * 3 + 2] = 0;
-    const c = PAL[Math.random() < 0.5 ? "gold" : (Math.random() < 0.6 ? "berry" : "snow")];
-    sparkCol[idx * 3] = c[0]; sparkCol[idx * 3 + 1] = c[1]; sparkCol[idx * 3 + 2] = c[2];
-    sparkSiz[idx] = rnd(3, 6);
-    sparkAlpha[idx] = 1;
+  // 三层：内圈慢而小、中圈主色、外圈快而亮。
+  // 单层爆炸永远是"一团"，三层叠加才有层次。
+  const LAYERS = [
+    { pick: ["gold"], spd: 0.50, siz: [2.2, 3.6], n: 0.34 },
+    { pick: ["gold", "gold", "berry"], spd: 1.00, siz: [2.8, 4.8], n: 0.42 },
+    { pick: ["snow", "snow", "berry"], spd: 1.65, siz: [1.8, 3.2], n: 0.24 },
+  ];
+
+  for (const L of LAYERS) {
+    const cnt = Math.max(1, Math.round(n * L.n));
+    for (let i = 0; i < cnt; i++) {
+      const s = sparkState[sparkCursor];
+      const idx = sparkCursor;
+      sparkCursor = (sparkCursor + 1) % SPARK_N;
+
+      const a = Math.random() * TAU;
+      const v = power * L.spd * (0.55 + Math.random() * 0.75);
+      s.alive = true;
+      s.vx = Math.cos(a) * v;
+      s.vy = Math.sin(a) * v - power * 0.10;
+      s.life = 1;
+      s.decay = rnd(0.55, 1.0);
+
+      sparkPos[idx * 3] = wx;
+      sparkPos[idx * 3 + 1] = wy;
+      sparkPos[idx * 3 + 2] = 0;
+
+      const name = L.pick[(Math.random() * L.pick.length) | 0];
+      const c = PAL[name];
+      sparkCol[idx * 3] = c[0]; sparkCol[idx * 3 + 1] = c[1]; sparkCol[idx * 3 + 2] = c[2];
+      sparkSiz[idx] = rnd(L.siz[0], L.siz[1]);
+      sparkAlpha[idx] = 1;
+    }
   }
+
+  // 这两个属性只在起爆时变，但必须显式标记，否则 GPU 里一直是初始的 0：
+  // 点大小 0 + 颜色黑 = 什么都看不见
+  sparkGeo.attributes.aSize.needsUpdate = true;
+  sparkGeo.attributes.aColor.needsUpdate = true;
+  sparkGeo.attributes.position.needsUpdate = true;
+  sparkGeo.attributes.aAlpha.needsUpdate = true;
 }
 
 /* ---------------------------------------------------------------- 尺寸 */
@@ -571,8 +608,8 @@ function resize() {
   const tan = Math.tan(FOV * Math.PI / 360);
 
   // 竖屏按宽度取距离，横屏按高度取，两边都不裁切
-  const dH = 820 / (2 * tan);
-  const dW = 470 / (2 * tan * aspect);
+  const dH = 900 / (2 * tan);
+  const dW = 560 / (2 * tan * aspect);
   baseDist = Math.max(dH, dW);
 
   camera.aspect = aspect;
@@ -627,7 +664,7 @@ el.addEventListener("pointerdown", (e) => {
     moved = 0; downAt = performance.now(); spin = 0;
     clearTimeout(longTimer);
     longTimer = setTimeout(() => {
-      if (moved < 10) { const s = starScreen(); burst(s[0], s[1], 110, 260); }
+      if (moved < 10) { const s = starScreen(); burst(s[0], s[1], 160, 360); }
     }, 620);
   } else if (ptrs.size === 2) {
     clearTimeout(longTimer);
@@ -876,9 +913,11 @@ function animate() {
   group.rotation.x = pitch;
 
   uniforms.uTime.value = t;
-  uniforms.uLight.value = light;
+  // 极慢的呼吸：整棵树亮暗起伏半个百分点级别，静态时才不显得死
+  uniforms.uLight.value = light * (0.94 + 0.06 * Math.sin(t * 0.75));
   uniforms.uScatter.value = scatterK;
   uniforms.uIntro.value = introT;
+
 
   // 雪
   if (!REDUCED) {
@@ -902,8 +941,8 @@ function animate() {
     sparkPos[i * 3] += s.vx * dt;
     sparkPos[i * 3 + 1] += s.vy * dt;
     s.vy -= 140 * dt;
-    s.vx *= Math.exp(-1.1 * dt);
-    s.vy *= Math.exp(-0.5 * dt);
+    s.vx *= Math.exp(-0.55 * dt);
+    s.vy *= Math.exp(-0.30 * dt);
     s.life -= s.decay * dt;
     sparkAlpha[i] = Math.max(0, s.life);
     if (s.life <= 0) { s.alive = false; sparkAlpha[i] = 0; }
@@ -914,6 +953,13 @@ function animate() {
   }
 
   camera.position.z = baseDist / zoom;
+
+  // 几乎察觉不到的横向漂移，给静止画面一点空气感
+  if (!REDUCED) {
+    camera.position.x = Math.sin(t * 0.13) * 16;
+    camera.position.y = Math.cos(t * 0.107) * 10;
+  }
+  uniforms.uCamDist.value = camera.position.z;
 
   // 自适应：掉帧就减少绘制粒子（均匀抽样，形状不变）
   frameAcc += dt; frameN++;
