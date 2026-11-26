@@ -195,7 +195,7 @@ body{
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const SMALL = window.matchMedia("(max-width: 720px)").matches;
   const LOW = SMALL || (navigator.hardwareConcurrency || 8) <= 4;
-  const SPRITE = LOW ? 32 : 64;
+  const SPRITE = 64;   // 贴图统一 64px：放大时才有细节
 
   let W = 0, H = 0, DPR = 1;
   let CX = 0, CY = 0;
@@ -226,8 +226,9 @@ body{
     const c = cv.getContext("2d");
     const g = c.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
     g.addColorStop(0.0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},1)`);
-    g.addColorStop(0.30, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.62)`);
-    g.addColorStop(0.62, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.18)`);
+    g.addColorStop(0.16, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.92)`);
+    g.addColorStop(0.40, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.34)`);
+    g.addColorStop(0.68, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},.08)`);
     g.addColorStop(1.0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);
     c.fillStyle = g;
     c.fillRect(0, 0, s, s);
@@ -251,8 +252,8 @@ body{
   }
 
   function buildTree() {
-    const N_BODY = LOW ? 1800 : 4200;
-    const N_GAR = LOW ? 420 : 900;
+    const N_BODY = LOW ? 2000 : 5200;
+    const N_GAR = LOW ? 480 : 1100;
 
     // — 树体：大部分均匀铺满锥体，少部分沿螺旋成枝，才既有体积又有旋纹
     for (let i = 0; i < N_BODY; i++) {
@@ -409,9 +410,17 @@ body{
 
   // ---------------------------------------------------------------- 尺寸
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, LOW ? 1.25 : 1.5);
     W = window.innerWidth;
     H = window.innerHeight;
+
+    // 按真实 devicePixelRatio 渲染，只用总像素预算兜底。
+    // 以前写死 1.5 —— Retina 上等于把画布放大 1.33 倍，所以糊。
+    // 预算而不是固定倍数：页面放大时 CSS 尺寸变小、DPR 变大，总像素基本不变，
+    // 所以放大后依然是满分辨率、依然清晰。
+    const budget = LOW ? 3.5e6 : 8.0e6;
+    const byBudget = Math.sqrt(budget / Math.max(1, W * H));
+    DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, byBudget, 4));
+
     canvas.width = Math.round(W * DPR);
     canvas.height = Math.round(H * DPR);
     canvas.style.width = W + "px";
@@ -509,7 +518,7 @@ body{
       const tw = 0.74 + 0.26 * Math.sin(time * p.speed + p.phase);
       const depth = clamp(s * 1.05, 0.22, 1.0);
       let alpha = tw * depth * light;
-      const r = p.size * s * zoom * 2.2;
+      const r = p.size * s * zoom * 2.35;
       if (alpha < 0.02 || r < 0.35) continue;
       if (alpha > 1) alpha = 1;
 
@@ -547,7 +556,7 @@ body{
     if (ftN >= 40) {
       const avg = ftAcc / ftN;
       const target = LOW ? 1 / 30 : 1 / 60;
-      if (avg > target * 1.35) qScale = Math.max(0.45, qScale - 0.12);
+      if (avg > target * 1.35) qScale = Math.max(0.35, qScale - 0.12);
       else if (avg < target * 1.08) qScale = Math.min(1, qScale + 0.06);
       ftAcc = 0; ftN = 0;
     }
@@ -559,10 +568,10 @@ body{
     const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
     const cpit = Math.cos(pitch), spit = Math.sin(pitch);
 
-    // 背景：半透明覆盖 = 轻微拖尾
+    // 背景：留一点拖尾，但清得够干净，不然旧帧会积成一层雾
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgba(4,6,11,0.34)";
+    ctx.fillStyle = "rgba(4,6,11,0.90)";
     ctx.fillRect(0, 0, W, H);
 
     ctx.globalCompositeOperation = "lighter";
