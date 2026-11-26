@@ -176,7 +176,7 @@ body{
 
 <p class="hint" id="hint">拖动旋转 &nbsp;·&nbsp; 捏合远近 &nbsp;·&nbsp; 双击点灯 &nbsp;·&nbsp; 长按烟花</p>
 
-<button class="handBtn" id="handBtn" type="button">✋ 手势控制</button>
+<button class="handBtn" id="handBtn" type="button">手势控制</button>
 <video id="cam" playsinline muted></video>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -194,6 +194,8 @@ body{
 
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const SMALL = window.matchMedia("(max-width: 720px)").matches;
+  const LOW = SMALL || (navigator.hardwareConcurrency || 8) <= 4;
+  const SPRITE = LOW ? 32 : 64;
 
   let W = 0, H = 0, DPR = 1;
   let CX = 0, CY = 0;
@@ -218,7 +220,7 @@ body{
   const sprites = {};
 
   function makeSprite(rgb) {
-    const s = 64;
+    const s = SPRITE;
     const cv = document.createElement("canvas");
     cv.width = cv.height = s;
     const c = cv.getContext("2d");
@@ -249,8 +251,8 @@ body{
   }
 
   function buildTree() {
-    const N_BODY = SMALL ? 2400 : 4800;
-    const N_GAR = SMALL ? 520 : 1000;
+    const N_BODY = LOW ? 2200 : 4800;
+    const N_GAR = LOW ? 460 : 1000;
 
     // — 树体：大部分均匀铺满锥体，少部分沿螺旋成枝，才既有体积又有旋纹
     for (let i = 0; i < N_BODY; i++) {
@@ -304,7 +306,7 @@ body{
       const r = (i % 2 === 0) ? 40 : 15;
       v.push([Math.cos(ang) * r, Math.sin(ang) * r]);
     }
-    const N_STAR = 300;
+    const N_STAR = LOW ? 150 : 300;
     for (let i = 0; i < N_STAR; i++) {
       const k = (Math.random() * 10) | 0;
       const a = v[k], b = v[(k + 1) % 10];
@@ -321,7 +323,7 @@ body{
     }
 
     // — 地面：一圈很暗的金
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < (LOW ? 120 : 200); i++) {
       const a = Math.random() * Math.PI * 2;
       const r = rnd(TR * 0.7, TR * 1.35);
       ground.push({
@@ -336,7 +338,7 @@ body{
     }
 
     // — 雪
-    const N_SNOW = SMALL ? 260 : 460;
+    const N_SNOW = LOW ? 180 : 460;
     for (let i = 0; i < N_SNOW; i++) {
       snow.push({
         x: rnd(-520, 520),
@@ -352,7 +354,7 @@ body{
     }
 
     // — 远处固定的星
-    const N_BG = SMALL ? 150 : 280;
+    const N_BG = LOW ? 90 : 280;
     for (let i = 0; i < N_BG; i++) {
       bgStars.push({
         x: rnd(-900, 900),
@@ -391,7 +393,7 @@ body{
 
   // ---------------------------------------------------------------- 尺寸
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    DPR = Math.min(window.devicePixelRatio || 1, LOW ? 1.5 : 2);
     W = window.innerWidth;
     H = window.innerHeight;
     canvas.width = Math.round(W * DPR);
@@ -485,7 +487,15 @@ body{
     }
   }
 
+  let frameTick = 0;
+
   function frame(now) {
+    // 手机上一次只画 30 帧：一半的绘制量，观感几乎没差别
+    if (LOW) {
+      frameTick++;
+      if (frameTick & 1) { requestAnimationFrame(frame); return; }
+    }
+
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     const time = (now - t0) / 1000;
@@ -717,7 +727,7 @@ body{
 
   const HAND = {
     ready: false, on: false, stream: null, landmarker: null,
-    lastVideoTime: -1, raf: 0, mode: "idle", base: null, lastPinch: 0,
+    lastVideoTime: -1, lastDetect: 0, raf: 0, mode: "idle", base: null, lastPinch: 0,
   };
 
   let toastTimer = 0;
@@ -728,7 +738,7 @@ body{
     toastTimer = setTimeout(() => toastEl.classList.remove("on"), ms || 3600);
   }
 
-  async function enableHands() {
+  async function enableHands(auto) {
     if (location.protocol === "file:") {
       toast("摄像头只在 http://localhost 下可用。在这个目录里运行 python3 -m http.server 8000，再打开 http://localhost:8000", 8000);
       return;
@@ -743,7 +753,11 @@ body{
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        video: {
+          facingMode: "user",
+          width: { ideal: LOW ? 320 : 640 },
+          height: { ideal: LOW ? 240 : 480 },
+        },
         audio: false,
       });
       HAND.stream = stream;
@@ -775,17 +789,19 @@ body{
       HAND.on = true;
       handBtn.disabled = false;
       handBtn.classList.add("on");
-      handBtn.textContent = "✋ 手势已开启";
-      toast("张开手掌转动树 · 握拳松开 · 拇指食指捏合点灯", 4600);
+      handBtn.textContent = "手势已开启";
+      if (!auto) toast("张开手掌转动树 · 握拳松开 · 拇指食指捏合点灯", 4600);
       detectLoop();
     } catch (err) {
       console.error(err);
       handBtn.disabled = false;
-      handBtn.textContent = "✋ 手势控制";
+      handBtn.textContent = "手势控制";
       stopHands();
-      if (err && err.name === "NotAllowedError") toast("摄像头被拒绝了。允许权限后再点一次。");
-      else if (err && err.name === "NotFoundError") toast("没有找到摄像头。");
-      else toast("手势没启动成功。鼠标和触摸照常可用。");
+      if (!auto) {
+        if (err && err.name === "NotAllowedError") toast("摄像头被拒绝了。允许权限后再点一次。");
+        else if (err && err.name === "NotFoundError") toast("没有找到摄像头。");
+        else toast("手势没启动成功。鼠标和触摸照常可用。");
+      }
     }
   }
 
@@ -806,10 +822,14 @@ body{
 
   function detectLoop() {
     if (!HAND.on) return;
-    if (cam.readyState >= 2 && cam.currentTime !== HAND.lastVideoTime) {
+    // 手机每 70ms 检一次就够，桌面 33ms；比每帧都跑省一半电
+    const gap = LOW ? 70 : 33;
+    const t = performance.now();
+    if (cam.readyState >= 2 && t - HAND.lastDetect >= gap && cam.currentTime !== HAND.lastVideoTime) {
+      HAND.lastDetect = t;
       HAND.lastVideoTime = cam.currentTime;
       try {
-        handleHand(HAND.landmarker.detectForVideo(cam, performance.now()));
+        handleHand(HAND.landmarker.detectForVideo(cam, t));
       } catch (e) { /* 单帧失败不影响 */ }
     }
     HAND.raf = requestAnimationFrame(detectLoop);
@@ -858,15 +878,15 @@ body{
   }
 
   handBtn.addEventListener("click", () => {
-    if (!HAND.ready) { enableHands(); return; }
+    if (!HAND.ready) { enableHands(false); return; }
     if (HAND.on) {
       stopHands();
-      handBtn.textContent = "✋ 手势控制";
+      handBtn.textContent = "手势控制";
     } else {
       HAND.on = true;
       cam.classList.add("on");
       handBtn.classList.add("on");
-      handBtn.textContent = "✋ 手势已开启";
+      handBtn.textContent = "手势已开启";
       detectLoop();
     }
   });
@@ -876,6 +896,12 @@ body{
   resize();
 
   setTimeout(() => hint.classList.add("tame"), 7200);
+
+  // 默认开启手势。file:// 下摄像头本来就不许用，直接跳过；
+  // 被拒绝或环境不支持时静默退回按钮，不打扰。
+  if (location.protocol !== "file:" && navigator.mediaDevices) {
+    setTimeout(() => { if (!HAND.ready && !HAND.on) enableHands(true); }, 700);
+  }
 
   requestAnimationFrame(frame);
 })();
