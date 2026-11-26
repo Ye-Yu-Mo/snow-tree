@@ -738,6 +738,13 @@ body{
     toastTimer = setTimeout(() => toastEl.classList.remove("on"), ms || 3600);
   }
 
+  function withTimeout(p, ms, label) {
+    return Promise.race([
+      p,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(label)), ms)),
+    ]);
+  }
+
   async function enableHands(auto) {
     if (location.protocol === "file:") {
       toast("摄像头只在 http://localhost 下可用。在这个目录里运行 python3 -m http.server 8000，再打开 http://localhost:8000", 8000);
@@ -752,14 +759,14 @@ body{
     handBtn.textContent = "打开摄像头…";
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await withTimeout(navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
           width: { ideal: LOW ? 320 : 640 },
           height: { ideal: LOW ? 240 : 480 },
         },
         audio: false,
-      });
+      }), 12000, "camera-timeout");
       HAND.stream = stream;
       cam.srcObject = stream;
       await cam.play();
@@ -767,10 +774,14 @@ body{
 
       handBtn.textContent = "加载手势模型…";
 
-      const mod = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+      const mod = await withTimeout(
+        import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"),
+        20000, "model-timeout"
+      );
       const { FilesetResolver, HandLandmarker } = mod;
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      const vision = await withTimeout(
+        FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"),
+        20000, "model-timeout"
       );
 
       const opts = {
@@ -779,10 +790,10 @@ body{
         numHands: 1,
       };
       try {
-        HAND.landmarker = await HandLandmarker.createFromOptions(vision, opts);
+        HAND.landmarker = await withTimeout(HandLandmarker.createFromOptions(vision, opts), 30000, "model-timeout");
       } catch (e) {
         opts.baseOptions.delegate = "CPU";
-        HAND.landmarker = await HandLandmarker.createFromOptions(vision, opts);
+        HAND.landmarker = await withTimeout(HandLandmarker.createFromOptions(vision, opts), 30000, "model-timeout");
       }
 
       HAND.ready = true;
@@ -798,7 +809,10 @@ body{
       handBtn.textContent = "手势控制";
       stopHands();
       if (!auto) {
-        if (err && err.name === "NotAllowedError") toast("摄像头被拒绝了。允许权限后再点一次。");
+        const msg = err && err.message;
+        if (msg === "camera-timeout") toast("摄像头没有响应。看看是不是被别的程序占用了。");
+        else if (msg === "model-timeout") toast("手势模型加载超时。检查网络后再点一次。");
+        else if (err && err.name === "NotAllowedError") toast("摄像头被拒绝了。允许权限后再点一次。");
         else if (err && err.name === "NotFoundError") toast("没有找到摄像头。");
         else toast("手势没启动成功。鼠标和触摸照常可用。");
       }
